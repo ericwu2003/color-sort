@@ -1,11 +1,14 @@
+use std::char::MAX;
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::File;
 use std::io::{self, BufRead};
 
 pub const TUBE_SIZE: usize = 4;
+pub const MAX_SEARCH_DEPTH: usize = 500;
 
 // color[3] is the "top" of the tube, while color[0] is the "bottom" of the tube.
-#[derive(Clone)]
+#[derive(Clone, Hash, Eq, PartialEq)]
 struct Tube {
     colors: [i32; TUBE_SIZE],
     num_balls: usize,
@@ -59,7 +62,7 @@ impl Tube {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Hash, Eq, PartialEq)]
 struct GameState(Vec<Tube>);
 
 impl GameState {
@@ -95,10 +98,9 @@ impl GameState {
     }
 
     fn get_legal_moves(&self) -> Vec<Move> {
-        let tubes = &self.0;
         let mut legal_moves = Vec::new();
-        for (source_index, source_tube) in tubes.iter().enumerate() {
-            for (target_index, target_tube) in tubes.iter().enumerate() {
+        for source_index in 0..self.0.len() {
+            for target_index in 0..self.0.len() {
                 if self.is_legal_move(source_index, target_index) {
                     legal_moves.push(Move {
                         from: source_index,
@@ -158,7 +160,12 @@ impl GameState {
         source_tube.num_balls -= 1;
     }
 
-    fn search_for_solution(&self, move_history: &mut Vec<Move>) -> bool {
+    fn search_for_solution(
+        &self,
+        move_history: &mut Vec<Move>,
+        visited_states: &mut HashSet<GameState>,
+        curr_depth: usize,
+    ) -> bool {
         // this function returns true if it finds a solution, false otherwise
 
         let last_move;
@@ -170,11 +177,12 @@ impl GameState {
         }
 
         if self.is_solved() {
-            println!("SOLVED");
             dbg!(move_history);
+            println!("SOLVED");
             return true;
         }
 
+        let mut found_solution = false;
         for m in self.get_legal_moves() {
             if let Some(last_move) = last_move {
                 if last_move.to == m.from && last_move.from == m.to {
@@ -183,15 +191,20 @@ impl GameState {
             }
 
             let mut new_gs = self.clone();
+
             new_gs.apply_move(m);
-            move_history.push(m);
-            if new_gs.search_for_solution(move_history) {
-                return true;
+
+            if !visited_states.contains(&new_gs) && curr_depth < MAX_SEARCH_DEPTH {
+                move_history.push(m);
+                visited_states.insert(new_gs.clone());
+                if new_gs.search_for_solution(move_history, visited_states, curr_depth + 1) {
+                    found_solution = true;
+                }
+                move_history.pop();
             }
-            move_history.pop();
         }
 
-        return false;
+        return found_solution;
     }
 }
 
@@ -214,7 +227,33 @@ impl fmt::Display for GameState {
     }
 }
 
-#[derive(fmt::Debug, Clone, Copy)]
+impl fmt::Debug for GameState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let tubes = &self.0;
+        writeln!(f, "##### Total of {} tubes", tubes.len())?;
+        for tube in tubes {
+            for ball_position in 0..TUBE_SIZE {
+                if ball_position >= tube.num_balls {
+                    write!(f, "_")?;
+                } else {
+                    write!(f, "{}", tube.colors[ball_position])?;
+                }
+            }
+            write!(f, "\n")?;
+        }
+        writeln!(f, "#####")?;
+        return Ok(());
+    }
+}
+
+impl fmt::Debug for Move {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Move from {} to {}", self.from, self.to)?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
 struct Move {
     from: usize,
     to: usize,
@@ -230,5 +269,11 @@ fn main() {
     //     println!("{}", new_gs);
     // }
 
-    gs.search_for_solution(&mut Vec::new());
+    let mut move_history = Vec::new();
+    let mut visited_states = HashSet::new();
+    visited_states.insert(gs.clone());
+
+    gs.search_for_solution(&mut move_history, &mut visited_states, 0);
+
+    // println!("{:?}", visited_states);
 }
