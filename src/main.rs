@@ -1,18 +1,36 @@
-use std::char::MAX;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::{self, BufRead};
 
 pub const TUBE_SIZE: usize = 4;
-pub const MAX_SEARCH_DEPTH: usize = 500;
+pub const MAX_SEARCH_DEPTH: usize = 200;
 
 // color[3] is the "top" of the tube, while color[0] is the "bottom" of the tube.
-#[derive(Clone, Hash, Eq, PartialEq)]
+#[derive(Clone)]
 struct Tube {
     colors: [i32; TUBE_SIZE],
     num_balls: usize,
 }
+
+impl Hash for Tube {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.num_balls.hash(state);
+        for i in 0..self.num_balls {
+            self.colors[i].hash(state);
+        }
+    }
+}
+
+impl PartialEq for Tube {
+    fn eq(&self, other: &Self) -> bool {
+        self.num_balls == other.num_balls
+            && self.colors[0..self.num_balls] == other.colors[0..self.num_balls]
+    }
+}
+
+impl Eq for Tube {}
 
 impl Tube {
     fn empty_tube() -> Self {
@@ -160,51 +178,46 @@ impl GameState {
         source_tube.num_balls -= 1;
     }
 
-    fn search_for_solution(
-        &self,
-        move_history: &mut Vec<Move>,
-        visited_states: &mut HashSet<GameState>,
-        curr_depth: usize,
-    ) -> bool {
+    fn search_for_solution(&self) {
         // this function returns true if it finds a solution, false otherwise
 
-        let last_move;
-        if move_history.is_empty() {
-            last_move = None;
-        } else {
-            // This option will be None if move_history is empty
-            last_move = move_history.get(move_history.len() - 1).map(|x| x.clone());
-        }
+        let mut exploration_queue: VecDeque<(GameState, Vec<Move>)> = VecDeque::new();
+        let mut visited_states: HashSet<GameState> = HashSet::new();
 
-        if self.is_solved() {
-            dbg!(move_history);
-            println!("SOLVED");
-            return true;
-        }
+        exploration_queue.push_back((self.clone(), Vec::new()));
+        visited_states.insert(self.clone());
+        let mut loop_index = 0;
+        while !exploration_queue.is_empty() {
+            let (curr_state, move_history) = exploration_queue.pop_front().unwrap();
 
-        let mut found_solution = false;
-        for m in self.get_legal_moves() {
-            if let Some(last_move) = last_move {
-                if last_move.to == m.from && last_move.from == m.to {
-                    continue;
-                }
+            loop_index += 1;
+            if loop_index % 32768 == 0 {
+                println!(
+                    "visited {} states, queue is {} elements long, current depth is {}",
+                    visited_states.len(),
+                    exploration_queue.len(),
+                    move_history.len(),
+                );
+            }
+            if curr_state.is_solved() {
+                dbg!(&move_history);
+                println!("SOLVED in {} moves", move_history.len());
+                return;
             }
 
-            let mut new_gs = self.clone();
+            for m in curr_state.get_legal_moves() {
+                let mut new_gs: GameState = curr_state.clone();
 
-            new_gs.apply_move(m);
+                new_gs.apply_move(m);
 
-            if !visited_states.contains(&new_gs) && curr_depth < MAX_SEARCH_DEPTH {
-                move_history.push(m);
-                visited_states.insert(new_gs.clone());
-                if new_gs.search_for_solution(move_history, visited_states, curr_depth + 1) {
-                    found_solution = true;
+                if !visited_states.contains(&new_gs) && move_history.len() < MAX_SEARCH_DEPTH {
+                    let mut move_history_copy = move_history.clone();
+                    move_history_copy.push(m);
+                    visited_states.insert(new_gs.clone());
+                    exploration_queue.push_back((new_gs, move_history_copy));
                 }
-                move_history.pop();
             }
         }
-
-        return found_solution;
     }
 }
 
@@ -269,11 +282,7 @@ fn main() {
     //     println!("{}", new_gs);
     // }
 
-    let mut move_history = Vec::new();
-    let mut visited_states = HashSet::new();
-    visited_states.insert(gs.clone());
-
-    gs.search_for_solution(&mut move_history, &mut visited_states, 0);
+    gs.search_for_solution();
 
     // println!("{:?}", visited_states);
 }
