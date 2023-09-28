@@ -10,23 +10,21 @@ pub const MAX_SEARCH_DEPTH: usize = 200;
 // color[3] is the "top" of the tube, while color[0] is the "bottom" of the tube.
 #[derive(Clone)]
 struct Tube {
-    colors: [i32; TUBE_SIZE],
-    num_balls: usize,
+    colors: [u8; TUBE_SIZE as usize],
+    num_balls: u8,
 }
 
 impl Hash for Tube {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.num_balls.hash(state);
-        for i in 0..self.num_balls {
-            self.colors[i].hash(state);
-        }
+        self.colors[0..self.num_balls as usize].hash(state);
     }
 }
 
 impl PartialEq for Tube {
     fn eq(&self, other: &Self) -> bool {
         self.num_balls == other.num_balls
-            && self.colors[0..self.num_balls] == other.colors[0..self.num_balls]
+            && self.colors[0..self.num_balls as usize] == other.colors[0..self.num_balls as usize]
     }
 }
 
@@ -43,15 +41,15 @@ impl Tube {
     fn new_from_str(tube_str: &str) -> Self {
         assert!(tube_str.len() == TUBE_SIZE);
 
-        let mut colors = [0; TUBE_SIZE];
+        let mut colors = [0u8; TUBE_SIZE];
 
         for (i, char) in tube_str.chars().enumerate() {
-            colors[i] = i32::from_str_radix(&char.to_string(), 36).unwrap();
+            colors[i] = u8::from_str_radix(&char.to_string(), 36).unwrap();
         }
 
         return Tube {
             colors,
-            num_balls: TUBE_SIZE,
+            num_balls: TUBE_SIZE as u8,
         };
     }
 
@@ -60,11 +58,11 @@ impl Tube {
     }
 
     fn is_full(&self) -> bool {
-        return self.num_balls == TUBE_SIZE;
+        return self.num_balls == TUBE_SIZE as u8;
     }
 
     fn is_solved(&self) -> bool {
-        if self.num_balls != TUBE_SIZE {
+        if self.num_balls != TUBE_SIZE as u8 {
             return false;
         }
         for i in 0..TUBE_SIZE - 1 {
@@ -75,7 +73,7 @@ impl Tube {
         return true;
     }
 
-    fn get_top_color(&self) -> i32 {
+    fn get_top_color(&self) -> u8 {
         return self.colors[(self.num_balls - 1) as usize];
     }
 }
@@ -121,8 +119,8 @@ impl GameState {
             for target_index in 0..self.0.len() {
                 if self.is_legal_move(source_index, target_index) {
                     legal_moves.push(Move {
-                        from: source_index,
-                        to: target_index,
+                        from: source_index as u8,
+                        to: target_index as u8,
                     });
                 }
             }
@@ -165,16 +163,16 @@ impl GameState {
 
     fn apply_move(&mut self, m: Move) {
         // this function assumes that m is a legal move and moves a ball from m.from to m.to
-        if !self.is_legal_move(m.from, m.to) {
+        if !self.is_legal_move(m.from as usize, m.to as usize) {
             panic!();
         }
         let tubes = &mut self.0;
-        let target_color = tubes.get(m.from).unwrap().get_top_color();
-        let target_tube = tubes.get_mut(m.to).unwrap();
+        let target_color = tubes.get(m.from as usize).unwrap().get_top_color();
+        let target_tube = tubes.get_mut(m.to as usize).unwrap();
         target_tube.num_balls += 1;
-        target_tube.colors[target_tube.num_balls - 1] = target_color;
+        target_tube.colors[(target_tube.num_balls - 1) as usize] = target_color;
 
-        let source_tube = tubes.get_mut(m.from).unwrap();
+        let source_tube = tubes.get_mut(m.from as usize).unwrap();
         source_tube.num_balls -= 1;
     }
 
@@ -227,7 +225,7 @@ impl fmt::Display for GameState {
         writeln!(f, "##### Total of {} tubes", tubes.len())?;
         for tube in tubes {
             for ball_position in 0..TUBE_SIZE {
-                if ball_position >= tube.num_balls {
+                if ball_position >= tube.num_balls as usize {
                     write!(f, "_")?;
                 } else {
                     write!(f, "{}", tube.colors[ball_position])?;
@@ -246,7 +244,7 @@ impl fmt::Debug for GameState {
         writeln!(f, "##### Total of {} tubes", tubes.len())?;
         for tube in tubes {
             for ball_position in 0..TUBE_SIZE {
-                if ball_position >= tube.num_balls {
+                if ball_position >= tube.num_balls as usize {
                     write!(f, "_")?;
                 } else {
                     write!(f, "{}", tube.colors[ball_position])?;
@@ -268,8 +266,8 @@ impl fmt::Debug for Move {
 
 #[derive(Clone, Copy)]
 struct Move {
-    from: usize,
-    to: usize,
+    from: u8,
+    to: u8,
 }
 
 fn main() {
