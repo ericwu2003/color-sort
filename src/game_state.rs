@@ -3,7 +3,7 @@ pub const MAX_SEARCH_DEPTH: usize = 200;
 use crate::move_type::Move;
 use crate::tube::{Tube, TUBE_SIZE};
 use dashmap::DashSet;
-use std::collections::VecDeque;
+use std::collections::{BinaryHeap, VecDeque};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::{self, BufRead};
@@ -12,13 +12,41 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::{fmt, thread};
 
-const THREAD_COUNT: usize = 4;
+const THREAD_COUNT: usize = 8;
 static IS_SOLVED_FLAG: AtomicBool = AtomicBool::new(false);
 const THREAD_SYNC_INTERVAL: usize = 8192; // number of loop iterations a thread will run before syncing with global queue
 const LOGGING_INTERVAL: usize = 32768;
 
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub struct GameState(Vec<Tube>);
+
+pub struct GameStateWithHistory(GameState, Vec<Move>);
+
+impl Ord for GameStateWithHistory {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.1.len().cmp(&self.1.len())
+    }
+}
+
+impl PartialOrd for GameStateWithHistory {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        other.1.len().partial_cmp(&self.1.len())
+    }
+}
+
+impl PartialEq for GameStateWithHistory {
+    fn eq(&self, other: &Self) -> bool {
+        self.1.len() == other.1.len()
+    }
+}
+
+impl Eq for GameStateWithHistory {}
+
+impl From<(GameState, Vec<Move>)> for GameStateWithHistory {
+    fn from(value: (GameState, Vec<Move>)) -> Self {
+        GameStateWithHistory(value.0, value.1)
+    }
+}
 
 impl GameState {
     pub fn new_from_file() -> Self {
@@ -113,8 +141,8 @@ impl GameState {
 
     pub fn search_for_solution(&self) {
         let visited_states_global: Arc<DashSet<GameState>> = Arc::new(DashSet::new());
-        let queue_global: Arc<Mutex<VecDeque<(GameState, Vec<Move>)>>> =
-            Arc::new(Mutex::new(VecDeque::new()));
+        let queue_global: Arc<Mutex<BinaryHeap<GameStateWithHistory>>> =
+            Arc::new(Mutex::new(BinaryHeap::new()));
 
         let initial_state = &self.clone();
 
@@ -160,12 +188,15 @@ impl GameState {
                     } else {
                         // sync the global and local queues here
                         let mut queue_global = queue_global.lock().unwrap();
-                        queue_global.extend(queue_to_produce_local.into_iter());
+
+                        for state in queue_to_produce_local {
+                            queue_global.push(GameStateWithHistory::from(state));
+                        }
                         queue_to_produce_local = VecDeque::new();
                         while queue_to_consume_local.len() < THREAD_SYNC_INTERVAL {
-                            match queue_global.pop_front() {
+                            match queue_global.pop() {
                                 Some(state) => {
-                                    queue_to_consume_local.push_back(state);
+                                    queue_to_consume_local.push_back((state.0, state.1));
                                 }
                                 None => break,
                             }
