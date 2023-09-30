@@ -1,6 +1,6 @@
 pub const MAX_SEARCH_DEPTH: usize = 200;
 
-use crate::move_type::Move;
+use crate::move_type::{Move, MoveHistory};
 use crate::tube::{Tube, TUBE_SIZE};
 use dashmap::DashSet;
 use std::collections::{BinaryHeap, VecDeque};
@@ -20,7 +20,7 @@ const LOGGING_INTERVAL: usize = 32768;
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub struct GameState(Vec<Tube>);
 
-pub struct GameStateWithHistory(GameState, Vec<Move>);
+pub struct GameStateWithHistory(GameState, MoveHistory);
 
 impl Ord for GameStateWithHistory {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
@@ -42,8 +42,8 @@ impl PartialEq for GameStateWithHistory {
 
 impl Eq for GameStateWithHistory {}
 
-impl From<(GameState, Vec<Move>)> for GameStateWithHistory {
-    fn from(value: (GameState, Vec<Move>)) -> Self {
+impl From<(GameState, MoveHistory)> for GameStateWithHistory {
+    fn from(value: (GameState, MoveHistory)) -> Self {
         GameStateWithHistory(value.0, value.1)
     }
 }
@@ -158,12 +158,12 @@ impl GameState {
             is_solved_flag.store(false, Ordering::SeqCst);
 
             let mut loop_index = 0;
-            let mut move_history: Vec<Move> = Vec::new();
+            let mut move_history: MoveHistory = MoveHistory::new();
             let mut queue_to_consume_local = VecDeque::new();
             let mut queue_to_produce_local = VecDeque::new();
             // let mut visited_states_local = HashSet::new();
             if thread_index == 0 {
-                queue_to_consume_local.push_back((curr_state.clone(), Vec::new()));
+                queue_to_consume_local.push_back((curr_state.clone(), MoveHistory::new()));
             }
 
             handles.push(thread::spawn(move || loop {
