@@ -2,11 +2,20 @@ pub const MAX_SEARCH_DEPTH: usize = 200;
 
 use crate::move_type::Move;
 use crate::tube::{Tube, TUBE_SIZE};
-use std::collections::{HashSet, VecDeque};
-use std::fmt;
+use dashmap::DashSet;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::hash::Hash;
 use std::io::{self, BufRead};
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
+use std::{fmt, thread};
+
+const THREAD_COUNT: usize = 4;
+static IS_SOLVED_FLAG: AtomicBool = AtomicBool::new(false);
+const THREAD_SYNC_INTERVAL: usize = 8192; // number of loop iterations a thread will run before syncing with global queue
+const LOGGING_INTERVAL: usize = 32768;
 
 #[derive(Clone, Hash, Eq, PartialEq)]
 pub struct GameState(Vec<Tube>);
@@ -31,10 +40,6 @@ impl GameState {
         }
 
         return GameState(game_state);
-    }
-
-    fn num_tubes(&self) -> usize {
-        self.0.len()
     }
 
     fn is_solved(&self) -> bool {
@@ -107,43 +112,95 @@ impl GameState {
     }
 
     pub fn search_for_solution(&self) {
-        // this function returns true if it finds a solution, false otherwise
+        let visited_states_global: Arc<DashSet<GameState>> = Arc::new(DashSet::new());
+        let queue_global: Arc<Mutex<VecDeque<(GameState, Vec<Move>)>>> =
+            Arc::new(Mutex::new(VecDeque::new()));
 
-        let mut exploration_queue: VecDeque<(GameState, Vec<Move>)> = VecDeque::new();
-        let mut visited_states: HashSet<GameState> = HashSet::new();
+        let initial_state = &self.clone();
 
-        exploration_queue.push_back((self.clone(), Vec::new()));
-        visited_states.insert(self.clone());
-        let mut loop_index = 0;
-        while !exploration_queue.is_empty() {
-            let (curr_state, move_history) = exploration_queue.pop_front().unwrap();
+        visited_states_global.insert(initial_state.clone());
 
-            loop_index += 1;
-            if loop_index % 32768 == 0 {
-                println!(
-                    "visited {} states, queue is {} elements long, current depth is {}",
-                    visited_states.len(),
-                    exploration_queue.len(),
-                    move_history.len(),
-                );
+        let mut handles = Vec::with_capacity(THREAD_COUNT);
+
+        for thread_index in 0..THREAD_COUNT {
+            let mut curr_state: GameState = initial_state.clone();
+            let visited_states_global = Arc::clone(&visited_states_global);
+            let queue_global = Arc::clone(&queue_global);
+            let is_solved_flag = (&IS_SOLVED_FLAG).clone();
+            is_solved_flag.store(false, Ordering::SeqCst);
+
+            let mut loop_index = 0;
+            let mut move_history: Vec<Move> = Vec::new();
+            let mut queue_to_consume_local = VecDeque::new();
+            let mut queue_to_produce_local = VecDeque::new();
+            // let mut visited_states_local = HashSet::new();
+            if thread_index == 0 {
+                queue_to_consume_local.push_back((curr_state.clone(), Vec::new()));
             }
-            if curr_state.is_solved() {
-                dbg!(&move_history);
-                println!("SOLVED in {} moves", move_history.len());
-                return;
-            }
 
-            for m in curr_state.get_legal_moves() {
-                let mut new_gs: GameState = curr_state.clone();
+            handles.push(thread::spawn(move || loop {
+                for m in curr_state.get_legal_moves() {
+                    let mut new_gs: GameState = curr_state.clone();
 
-                new_gs.apply_move(m);
+                    new_gs.apply_move(m);
 
-                if !visited_states.contains(&new_gs) && move_history.len() < MAX_SEARCH_DEPTH {
-                    let mut move_history_copy = move_history.clone();
-                    move_history_copy.push(m);
-                    visited_states.insert(new_gs.clone());
-                    exploration_queue.push_back((new_gs, move_history_copy));
+                    if !visited_states_global.contains(&new_gs)
+                        && move_history.len() < MAX_SEARCH_DEPTH
+                    {
+                        let mut move_history_copy = move_history.clone();
+                        move_history_copy.push(m);
+                        visited_states_global.insert(new_gs.clone());
+                        queue_to_produce_local.push_back((new_gs, move_history_copy));
+                    }
                 }
+
+                if queue_to_consume_local.is_empty() {
+                    if is_solved_flag.load(Ordering::Relaxed) {
+                        return;
+                    } else {
+                        // sync the global and local queues here
+                        let mut queue_global = queue_global.lock().unwrap();
+                        queue_global.extend(queue_to_produce_local.into_iter());
+                        queue_to_produce_local = VecDeque::new();
+                        while queue_to_consume_local.len() < THREAD_SYNC_INTERVAL {
+                            match queue_global.pop_front() {
+                                Some(state) => {
+                                    queue_to_consume_local.push_back(state);
+                                }
+                                None => break,
+                            }
+                        }
+                        if queue_to_consume_local.is_empty() {
+                            continue;
+                        }
+                    }
+                }
+                (curr_state, move_history) = queue_to_consume_local.pop_front().unwrap();
+
+                if loop_index % LOGGING_INTERVAL == 0 {
+                    println!(
+                        "thread {} visited {} states current depth is {}",
+                        thread_index,
+                        visited_states_global.len(),
+                        move_history.len(),
+                    );
+                }
+
+                if curr_state.is_solved() {
+                    dbg!(&move_history);
+                    println!("SOLVED in {} moves", move_history.len());
+                    is_solved_flag.store(true, Ordering::SeqCst);
+                    return;
+                }
+
+                loop_index += 1;
+            }))
+        }
+
+        for handle in handles {
+            let res = handle.join();
+            if res.is_err() {
+                dbg!(res);
             }
         }
     }
